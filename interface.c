@@ -57,6 +57,25 @@ last_interface(void)
     return ifp;
 }
 
+int remove_interface(struct interface* ifp) {
+
+  struct interface *cur;
+  struct interface *prev = NULL;
+
+  if(!ifp || !interfaces)
+    return -1;
+  
+  for(cur = interfaces; cur->next; cur = cur->next) {
+    if(cur == ifp) {
+      prev->next = cur->next;
+      free(ifp);
+      return 0;
+    }
+    prev = cur;
+  }
+  return -1;
+}
+
 struct interface *
 add_interface(char *ifname, struct interface_conf *if_conf)
 {

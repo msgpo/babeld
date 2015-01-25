@@ -33,11 +33,13 @@ THE SOFTWARE.
 #include <signal.h>
 #include <assert.h>
 
+
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <net/if.h>
 #include <arpa/inet.h>
+#include <sys/un.h>
 
 #include "babeld.h"
 #include "util.h"
@@ -53,6 +55,9 @@ THE SOFTWARE.
 #include "configuration.h"
 #include "local.h"
 
+#define MAX_UCLIENTS (100)
+#define MAX_UCLIENT_MSG_SIZE (100)
+
 struct timeval now;
 
 unsigned char myid[8];
@@ -67,7 +72,8 @@ int random_id = 0;
 int do_daemonise = 0;
 const char *logfile = NULL,
     *pidfile = "/var/run/babeld.pid",
-    *state_file = "/var/lib/babel-state";
+    *state_file = "/var/lib/babel-state",
+    *socket_file = "/tmp/babeld.sock";
 
 unsigned char *receive_buffer = NULL;
 int receive_buffer_size = 0;
@@ -95,6 +101,288 @@ static void init_signals(void);
 static void dump_tables(FILE *out);
 static int reopen_logfile(void);
 
+int usock;
+
+struct uclient {
+  int fd;
+  char* msg;
+  unsigned int msg_len;
+  struct uclient* next;
+};
+
+#define FOR_ALL_UCLIENTS(_ucl) for(_ucl = uclients; _ucl; _ucl = _ucl->next)
+
+struct uclient* uclients = NULL;
+int uclient_count = 0;
+
+int send_first_hello(struct interface *ifp) {
+  if(!if_up(ifp))
+    return 1;
+  /* Apply jitter before we send the first message. */
+  usleep(roughly(10000));
+  gettime(&now);
+  send_hello(ifp);
+  send_wildcard_retraction(ifp);
+  return 0;
+}
+
+int send_second_hello(struct interface *ifp) {
+  if(!if_up(ifp))
+    return 1;
+  usleep(roughly(10000));
+  gettime(&now);
+  send_hello(ifp);
+  send_wildcard_retraction(ifp);
+  send_self_update(ifp);
+  send_request(ifp, NULL, 0);
+  flushupdates(ifp);
+  flushbuf(ifp);
+  return 0;
+}
+
+void init_interfaces() {
+  struct interface *ifp;
+  
+  /* Make some noise so that others notice us, and send retractions in
+     case we were restarted recently */
+  FOR_ALL_INTERFACES(ifp) {
+    if(send_first_hello(ifp) > 0)
+      continue;
+  }
+  
+  FOR_ALL_INTERFACES(ifp) {
+    if(send_second_hello(ifp) > 0) {
+      continue;
+    }
+  }
+}
+
+
+void init_interface(struct interface *ifp) {
+  send_first_hello(ifp);
+  send_second_hello(ifp);
+}
+
+
+static struct uclient* add_uclient(int fd) {
+
+  struct uclient *cur;
+
+  struct uclient *ucl = malloc(sizeof(struct uclient));
+  if(!ucl) {
+    return NULL;
+  }
+  
+  ucl->fd = fd;
+  ucl->next = NULL;
+  ucl->msg = malloc(MAX_UCLIENT_MSG_SIZE+1);
+  if(!(ucl->msg)) {
+    return NULL;
+  }
+
+  ucl->msg_len = 0;  
+
+  if(!uclients) {
+    uclients = ucl;
+    uclient_count++;
+    return ucl;
+  }
+  
+  cur = uclients;
+  while(cur->next) {
+    cur = cur->next;
+  }
+
+  cur->next = ucl;
+  uclient_count++;
+  return ucl;
+}
+
+int remove_uclient(struct uclient* ucl) {
+
+  struct uclient *cur;
+  struct uclient *prev = NULL;
+
+  if(!ucl || !uclients)
+    return -1;
+  
+  if(uclients == ucl) {
+    uclients = ucl->next;
+    close(ucl->fd);
+    free(ucl->msg);
+    free(ucl);
+    uclient_count--;
+    return 0;
+  }
+
+  for(cur = uclients; cur->next; cur = cur->next) {
+    if(cur == ucl) {
+      prev->next = cur->next;
+      close(ucl->fd);
+      free(ucl->msg);
+      free(ucl);
+      uclient_count--;
+      return 0;
+    }
+    prev = cur;
+  }
+  return -1;
+}
+
+// check if fd is a uclient fd
+// and return its uclient struct
+struct uclient* is_uclient_fd(int fd) {
+
+  struct uclient *cur;
+
+  if(!uclients)
+    return NULL;
+  
+  for(cur = uclients; cur->next; cur = cur->next) {
+    if(cur->fd == fd) {
+      return cur;
+    }
+  }
+  return NULL;
+}
+
+void handle_uclient_msg(struct uclient* ucl) {
+
+  struct interface* ifp = NULL;
+
+  printf("Got message: %s\n", ucl->msg);
+
+  ifp = add_interface(ucl->msg, NULL);
+  if(!ifp) {
+    return;
+  }
+  
+  init_interface(ifp);
+  remove_uclient(ucl);
+}
+
+void receive_uclient_msg(struct uclient* ucl) {
+  int num_bytes = read(ucl->fd, ucl->msg + ucl->msg_len, MAX_UCLIENT_MSG_SIZE - ucl->msg_len);
+
+  if(num_bytes < 0) {
+    fprintf(stderr, "Error reading from socket %s: %s\n", socket_file, strerror(errno));
+    return;
+  } else if(num_bytes == 0) {
+    ucl->msg[ucl->msg_len] = '\0';
+    handle_uclient_msg(ucl);
+    return;
+  }
+  ucl->msg_len += num_bytes;
+}
+
+int send_uclient_msg(char* cmd) {
+
+  int sock;
+  int cmd_len;
+  int bytes_written;
+  int ret;
+  struct sockaddr_un addr;
+	
+  cmd_len = strlen(cmd);
+  if(cmd_len > MAX_UCLIENT_MSG_SIZE) {
+    fprintf(stderr, "Command too long (max %d bytes)\n", MAX_UCLIENT_MSG_SIZE);
+    return -1;
+  }
+
+  memset(&addr, 0, sizeof(struct sockaddr_un));
+  addr.sun_family = AF_LOCAL;
+  strcpy(addr.sun_path, socket_file);
+
+  sock = socket(AF_LOCAL, SOCK_STREAM, 0);
+			
+  if(connect(sock, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) < 0) {
+    fprintf(stderr, "Connect failed to %s: %s\n", socket_file, strerror(errno));
+    close(sock);
+    return -1;
+  }
+
+  bytes_written = 0;
+			
+  while(bytes_written < cmd_len) {
+    ret = write(sock, cmd+bytes_written, cmd_len-bytes_written);
+    if(ret < 0)  {
+      fprintf(stderr, "Write failed to %s: %s\n", socket_file, strerror(errno));
+      return -1;
+    }
+    bytes_written += ret;
+  }
+
+  close(sock);
+  return 0;
+}
+
+int open_ipc_socket() {
+
+  struct sockaddr_un addr;
+  int usock_opts;
+  int ret;
+
+  memset(&addr, 0, sizeof(struct sockaddr_un));
+  addr.sun_family = AF_LOCAL;
+  strcpy(addr.sun_path, socket_file);
+
+  usock = socket(AF_LOCAL, SOCK_STREAM, 0);
+			
+  usock_opts = fcntl(usock, F_GETFL, 0);
+  ret = fcntl(usock, F_SETFL, usock_opts | O_NONBLOCK);
+  if(ret == -1) {
+    return ret;
+  }
+
+  if(connect(usock, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) < 0) {
+    if(errno != ENOENT) {
+      close(usock);
+      unlink(socket_file);
+      usock = socket(AF_LOCAL, SOCK_STREAM, 0);
+    }
+    //    printf("connect() error: %d | %s\n", errno, strerror(errno));
+  } else {
+    fprintf(stderr, "Looks like babeld is already running.\nUse '-a devname' to add a device.");
+    return 1;
+  }
+
+  if(bind(usock, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) < 0) {
+    fprintf(stderr, "Failed to bind socket %s: %s\n", socket_file, strerror(errno));
+    return 1;
+  }
+
+  if(listen(usock, 10) < 0) {
+    fprintf(stderr, "Listen failed on socket %s: %s\n", socket_file, strerror(errno));
+    return 1;
+  }
+
+  return 0;
+}
+
+
+void accept_ipc_connection() {
+
+	struct sockaddr addr;
+	socklen_t addr_size = sizeof(struct sockaddr);
+  int fd;
+
+  if(uclient_count >= MAX_UCLIENTS) {
+    fprintf(stderr, "Client connection limit reached (%d)\n", MAX_UCLIENTS);
+    return;
+  }
+
+	fd = accept(usock, (struct sockaddr *)&addr, &addr_size);
+
+	if(fd < 0) {
+    fprintf(stderr, "Accept failed on socket %s: %s\n", socket_file, strerror(errno));
+    return;
+  }
+
+  add_uclient(fd);
+
+  return;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -106,6 +394,8 @@ main(int argc, char **argv)
     void *vrc;
     unsigned int seed;
     struct interface *ifp;
+    struct uclient *ucl;
+    int client_mode = 0;
 
     gettime(&now);
 
@@ -123,11 +413,14 @@ main(int argc, char **argv)
     change_smoothing_half_life(4);
 
     while(1) {
-        opt = getopt(argc, argv, "m:p:h:H:i:k:A:sruS:d:g:lwz:M:t:T:c:C:DL:I:");
+        opt = getopt(argc, argv, "m:p:h:H:i:k:A:sruS:d:g:lwz:M:t:T:c:C:DL:I:a");
         if(opt < 0)
             break;
 
         switch(opt) {
+        case 'a':
+          client_mode = 1;
+          break;
         case 'm':
             rc = parse_address(optarg, protocol_group, NULL);
             if(rc < 0)
@@ -261,6 +554,13 @@ main(int argc, char **argv)
         default:
             goto usage;
         }
+    }
+
+    if(client_mode) {
+        for(i = optind; i < argc; i++) {
+            send_uclient_msg(argv[i]);
+        }
+        return 0;
     }
 
     if(num_config_files == 0) {
@@ -520,30 +820,8 @@ main(int argc, char **argv)
     expiry_time = now.tv_sec + roughly(30);
     source_expiry_time = now.tv_sec + roughly(300);
 
-    /* Make some noise so that others notice us, and send retractions in
-       case we were restarted recently */
-    FOR_ALL_INTERFACES(ifp) {
-        if(!if_up(ifp))
-            continue;
-        /* Apply jitter before we send the first message. */
-        usleep(roughly(10000));
-        gettime(&now);
-        send_hello(ifp);
-        send_wildcard_retraction(ifp);
-    }
-
-    FOR_ALL_INTERFACES(ifp) {
-        if(!if_up(ifp))
-            continue;
-        usleep(roughly(10000));
-        gettime(&now);
-        send_hello(ifp);
-        send_wildcard_retraction(ifp);
-        send_self_update(ifp);
-        send_request(ifp, NULL, 0);
-        flushupdates(ifp);
-        flushbuf(ifp);
-    }
+    init_interfaces();
+    open_ipc_socket();
 
     debugf("Entering main loop.\n");
 
@@ -590,6 +868,16 @@ main(int argc, char **argv)
                 maxfd = MAX(maxfd, local_sockets[i]);
             }
 #endif
+
+            // add unix ipc socket to set
+            FD_SET(usock, &readfds);
+            maxfd = MAX(maxfd, usock);
+
+            FOR_ALL_UCLIENTS(ucl) {
+              FD_SET(ucl->fd, &readfds);
+              maxfd = MAX(maxfd, ucl->fd);
+            }
+            
             rc = select(maxfd + 1, &readfds, NULL, NULL, &tv);
             if(rc < 0) {
                 if(errno != EINTR) {
@@ -608,6 +896,16 @@ main(int argc, char **argv)
 
         if(kernel_socket >= 0 && FD_ISSET(kernel_socket, &readfds))
             kernel_callback(kernel_routes_callback, NULL);
+
+        if(FD_ISSET(usock, &readfds)) {
+          accept_ipc_connection();
+        }
+
+        FOR_ALL_UCLIENTS(ucl) {
+          if(FD_ISSET(ucl->fd, &readfds)) {
+            receive_uclient_msg(ucl);
+          }
+        }
 
         if(FD_ISSET(protocol_socket, &readfds)) {
             rc = babel_recv(protocol_socket,
