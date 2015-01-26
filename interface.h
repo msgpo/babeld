@@ -120,9 +120,19 @@ if_up(struct interface *ifp)
 }
 
 struct interface *add_interface(char *ifname, struct interface_conf *if_conf);
+int remove_interface(struct interface* ifp);
 unsigned jitter(struct interface *ifp, int urgent);
 unsigned update_jitter(struct interface *ifp, int urgent);
 void set_timeout(struct timeval *timeout, int msecs);
 int interface_up(struct interface *ifp, int up);
 int interface_ll_address(struct interface *ifp, const unsigned char *address);
 void check_interfaces(void);
+
+int send_first_hello(struct interface *ifp);
+int send_second_hello(struct interface *ifp);
+int send_first_retraction(struct interface *ifp);
+int send_second_retraction(struct interface *ifp);
+void init_interfaces();
+int init_interface(struct interface *ifp);
+int manage_interface(char* ifname);
+int unmanage_interface(struct interface *ifp);

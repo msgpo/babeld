@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include <netinet/in.h>
 #include <net/if.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #include "babeld.h"
 #include "util.h"
@@ -493,4 +494,116 @@ check_interfaces(void)
 
     if(ifindex_changed)
         renumber_filters();
+}
+
+int send_first_hello(struct interface *ifp) {
+  if(!if_up(ifp))
+    return -1;
+  /* Apply jitter before we send the first message. */
+  usleep(roughly(10000));
+  gettime(&now);
+  send_hello(ifp);
+  send_wildcard_retraction(ifp);
+  return 0;
+}
+
+int send_second_hello(struct interface *ifp) {
+  if(!if_up(ifp))
+    return -1;
+  usleep(roughly(10000));
+  gettime(&now);
+  send_hello(ifp);
+  send_wildcard_retraction(ifp);
+  send_self_update(ifp);
+  send_request(ifp, NULL, 0);
+  flushupdates(ifp);
+  flushbuf(ifp);
+  return 0;
+}
+
+int send_first_retraction(struct interface *ifp) {
+  if(!if_up(ifp))
+    return -1;
+  send_wildcard_retraction(ifp);
+  /* Make sure that we expire quickly from our neighbours'
+     association caches. */
+  send_hello_noupdate(ifp, 10);
+  flushbuf(ifp);
+  usleep(roughly(1000));
+  gettime(&now);
+  return 0;
+}
+
+int send_second_retraction(struct interface *ifp) {
+  if(!if_up(ifp))
+    return -1;
+  send_wildcard_retraction(ifp);
+  send_hello_noupdate(ifp, 1);
+  flushbuf(ifp);
+  usleep(roughly(10000));
+  gettime(&now);
+
+  return 0;
+}
+
+int unmanage_interface(struct interface *ifp) {
+  if(!if_up(ifp))
+    return -1;
+  flush_interface_routes(ifp, 0);
+  if(send_first_retraction(ifp) < 0) {
+    return -1;
+  }
+  if(send_second_retraction(ifp) < 0) {
+    return -1;
+  }
+  interface_up(ifp, 0);
+  if(remove_interface(ifp) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+void init_interfaces() {
+  struct interface *ifp;
+  
+  /* Make some noise so that others notice us, and send retractions in
+     case we were restarted recently */
+  FOR_ALL_INTERFACES(ifp) {
+    if(send_first_hello(ifp) < 0)
+      continue;
+  }
+  
+  FOR_ALL_INTERFACES(ifp) {
+    if(send_second_hello(ifp) < 0) {
+      continue;
+    }
+  }
+}
+
+
+int init_interface(struct interface *ifp) {
+  if(send_first_hello(ifp) < 0) {
+    return -1;
+  }
+  if(send_second_hello(ifp) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+
+int manage_interface(char* ifname) {
+
+  struct interface* ifp = NULL;
+
+  ifp = add_interface(ifname, NULL);
+  if(!ifp) {
+    return -1;
+  }
+
+  if(init_interface(ifp) < 0) {
+    return -1;
+  }
+
+  return 0;
 }
