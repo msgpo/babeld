@@ -1,4 +1,5 @@
 PREFIX = /usr/local
+MANDIR = $(PREFIX)/share/man
 
 CDEBUGFLAGS = -Os -g -Wall
 
@@ -9,10 +10,12 @@ CFLAGS = $(CDEBUGFLAGS) $(DEFINES) $(EXTRA_DEFINES)
 LDLIBS = -lrt
 
 SRCS = babeld.c net.c kernel.c util.c interface.c source.c neighbour.c \
-       route.c xroute.c message.c resend.c configuration.c local.c ipc.c
+       route.c xroute.c message.c resend.c configuration.c local.c ipc.c \
+       disambiguation.c
 
 OBJS = babeld.o net.o kernel.o util.o interface.o source.o neighbour.o \
-       route.o xroute.o message.o resend.o configuration.o local.o ipc.o
+       route.o xroute.o message.o resend.o configuration.o local.o ipc.o \
+       disambiguation.o
 
 babeld: $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o babeld $(OBJS) $(LDLIBS)
@@ -38,12 +41,12 @@ install.minimal: babeld
 	cp -f babeld $(TARGET)$(PREFIX)/bin
 
 install: install.minimal all
-	mkdir -p $(TARGET)$(PREFIX)/man/man8
-	cp -f babeld.man $(TARGET)$(PREFIX)/man/man8/babeld.8
+	mkdir -p $(TARGET)$(MANDIR)/man8
+	cp -f babeld.man $(TARGET)$(MANDIR)/man8/babeld.8
 
 uninstall:
 	-rm -f $(TARGET)$(PREFIX)/bin/babeld
-	-rm -f $(TARGET)$(PREFIX)/man/man8/babeld.8
+	-rm -f $(TARGET)$(MANDIR)/man8/babeld.8
 
 clean:
 	-rm -f babeld babeld.html *.o *~ core TAGS gmon.out

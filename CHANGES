@@ -1,3 +1,13 @@
+babeld-1.6.0 (unreleased)
+
+  * Added support for source-specific routing.  Thanks to Matthieu Boutier.
+  * Added support for reflecting metrics as kernel priorities.  Thanks to
+    Pierre Pfister.
+  * Worked around a Linux kernel bug with an infinite EAGAIN loop.  Thanks
+    to Dave Taht.
+  * Changed wildcard updates to not set flag 0x40.  Reported by Markus
+    Stenberg.
+
 4 July 2014: babeld-1.5.1:
 
   * Added support for reading multiple configuration files by specifying
