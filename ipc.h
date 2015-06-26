@@ -11,12 +11,13 @@ struct uclient {
 
 #define FOR_ALL_UCLIENTS(_ucl) for(_ucl = uclients; _ucl; _ucl = _ucl->next)
 
+int send_uclient_msg(char* cmd);
 struct uclient* add_uclient(int fd);
 int remove_uclient(struct uclient* ucl);
 struct uclient* is_uclient_fd(int fd);
 void handle_uclient_msg(struct uclient* ucl);
 void receive_uclient_msg(struct uclient* ucl);
-int send_uclient_msg(char cmd, char* arg);
+int send_uclient_msg(char* cmd);
 int open_ipc_socket();
 void accept_ipc_connection();
 void handle_uclient_connections(fd_set* readfds);

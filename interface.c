@@ -546,16 +546,7 @@ int send_second_retraction(struct interface *ifp) {
   return 0;
 }
 
-
-
-int unmanage_interface(char* ifname) {
-  struct interface* ifp;
-
-  ifp = interface_by_name(ifname);
-  if(!ifp) {
-    return -1;
-  }
-
+int unmanage_interface(struct interface *ifp) {
   if(!if_up(ifp))
     return -1;
   flush_interface_routes(ifp, 0);
@@ -615,15 +606,4 @@ int manage_interface(char* ifname) {
   }
 
   return 0;
-}
-
-struct interface* interface_by_name(char* ifname) {
-  struct interface* ifp;
-
-  FOR_ALL_INTERFACES(ifp) {
-    if(strncmp(ifp->name, ifname, IF_NAMESIZE) == 0) {
-      return ifp;
-    }
-  }
-  return NULL;
 }

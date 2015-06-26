@@ -109,26 +109,10 @@ struct uclient* is_uclient_fd(int fd) {
 
 void handle_uclient_msg(struct uclient* ucl) {
 
-  char cmd;
-  char* arg;
-
-  cmd = (ucl->msg)[0];
-  arg = (ucl->msg)+1;
-
-  printf("Got command: '%c' with argument: %s\n", cmd, arg);
+  printf("Got message: %s\n", ucl->msg);
 
   // TODO verify that this is an interface name
-
-  switch(cmd) {
-
-  case 'a':
-    manage_interface(arg);
-    break;
-
-  case 'x':
-    unmanage_interface(arg);
-    break;
-  }
+  manage_interface(ucl->msg);
 
   remove_uclient(ucl);
 }
@@ -147,27 +131,19 @@ void receive_uclient_msg(struct uclient* ucl) {
   ucl->msg_len += num_bytes;
 }
 
-int send_uclient_msg(char cmd, char* arg) {
+int send_uclient_msg(char* cmd) {
 
   int sock;
-  size_t cmd_len;
+  int cmd_len;
   int bytes_written;
   int ret;
-  char* full_cmd;
   struct sockaddr_un addr;
 	
-  cmd_len = strlen(arg) + 2; // one for leading cmd and one for trailing \0
+  cmd_len = strlen(cmd);
   if(cmd_len > MAX_UCLIENT_MSG_SIZE) {
     fprintf(stderr, "Command too long (max %d bytes)\n", MAX_UCLIENT_MSG_SIZE);
     return -1;
   }
-
-  full_cmd = malloc(cmd_len);
-  if(!full_cmd) {
-    return -1;
-  }
-
-  snprintf(full_cmd, cmd_len, "%c%s", cmd, arg);
 
   memset(&addr, 0, sizeof(struct sockaddr_un));
   addr.sun_family = AF_LOCAL;
@@ -177,7 +153,6 @@ int send_uclient_msg(char cmd, char* arg) {
 			
   if(connect(sock, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) < 0) {
     fprintf(stderr, "Connect failed to %s: %s\n", socket_file, strerror(errno));
-    fprintf(stderr, "Are you sure you have a running babeld instance?\n");
     close(sock);
     return -1;
   }
@@ -185,7 +160,7 @@ int send_uclient_msg(char cmd, char* arg) {
   bytes_written = 0;
 			
   while(bytes_written < cmd_len) {
-    ret = write(sock, full_cmd+bytes_written, cmd_len-bytes_written);
+    ret = write(sock, cmd+bytes_written, cmd_len-bytes_written);
     if(ret < 0)  {
       fprintf(stderr, "Write failed to %s: %s\n", socket_file, strerror(errno));
       return -1;

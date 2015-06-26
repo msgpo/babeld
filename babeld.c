@@ -61,7 +61,6 @@ struct timeval now;
 unsigned char myid[8];
 int debug = 0;
 
-int fungible = 0;
 int link_detect = 0;
 int all_wireless = 0;
 int default_wireless_hello_interval = -1;
@@ -112,7 +111,7 @@ main(int argc, char **argv)
     void *vrc;
     unsigned int seed;
     struct interface *ifp;
-    char client_cmd = '\0';
+    int client_mode = 0;
 
     gettime(&now);
 
@@ -135,15 +134,13 @@ main(int argc, char **argv)
             break;
 
         switch(opt) {
-        case 'F':
-          printf("Starting in fungible mode\n");
-          fungible = 1;
-          break;
         case 'a':
-          client_cmd = 'a';
+          client_mode = 1;
           break;
         case 'x':
-          client_cmd = 'x';
+          printf("TODO removing interface not yet supported");
+          client_mode = 1;
+          goto usage;
           break;
         case 'm':
             rc = parse_address(optarg, protocol_group, NULL);
@@ -280,9 +277,9 @@ main(int argc, char **argv)
         }
     }
 
-    if(client_cmd != '\0') {
+    if(client_mode) {
         for(i = optind; i < argc; i++) {
-          send_uclient_msg(client_cmd, argv[i]);
+            send_uclient_msg(argv[i]);
         }
         return 0;
     }
@@ -411,8 +408,8 @@ main(int argc, char **argv)
             goto fail;
     }
 
-    if((fungible == 0) && (interfaces == NULL)) {
-        fprintf(stderr, "Eek... asked to run without fungible mode on no interfaces!\n");
+    if(interfaces == NULL) {
+        fprintf(stderr, "Eek... asked to run on no interfaces!\n");
         goto fail;
     }
 
@@ -545,10 +542,7 @@ main(int argc, char **argv)
     source_expiry_time = now.tv_sec + roughly(300);
 
     init_interfaces();
-
-    if(fungible) {
-      open_ipc_socket();
-    }
+    open_ipc_socket();
 
     debugf("Entering main loop.\n");
 
