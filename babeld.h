@@ -20,6 +20,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+#include <stdio.h>
+
 #define INFINITY ((unsigned short)(~0))
 
 #ifndef RTPROT_BABEL
@@ -107,3 +109,4 @@ extern int max_request_hopcount;
 void schedule_neighbours_check(int msecs, int override);
 void schedule_interfaces_check(int msecs, int override);
 int resize_receive_buffer(int size);
+void dump_tables(FILE *out);

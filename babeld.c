@@ -61,6 +61,7 @@ unsigned char myid[8];
 int have_id = 0;
 int debug = 0;
 
+int fungible = 0;
 int link_detect = 0;
 int all_wireless = 0;
 int has_ipv6_subtrees = 0;
@@ -97,7 +98,6 @@ static volatile sig_atomic_t exiting = 0, dumping = 0, reopening = 0;
 
 static int accept_local_connections(fd_set *readfds);
 static void init_signals(void);
-static void dump_tables(FILE *out);
 static int reopen_logfile(void);
 
 static int
@@ -154,6 +154,8 @@ main(int argc, char **argv)
     void *vrc;
     unsigned int seed;
     struct interface *ifp;
+    int ret;
+    char client_cmd = '\0';
 
     gettime(&now);
 
@@ -172,12 +174,24 @@ main(int argc, char **argv)
     has_ipv6_subtrees = kernel_has_ipv6_subtrees();
 
     while(1) {
-        opt = getopt(argc, argv,
-                     "m:p:h:H:i:k:A:sruS:d:g:lwz:M:t:T:c:C:DL:I:V");
+        opt = getopt(argc, argv, "m:p:h:H:k:A:sruS:d:g:lwz:M:t:T:c:C:DL:I:FaxiV");
         if(opt < 0)
             break;
 
         switch(opt) {
+        case 'F':
+          printf("Starting in fungible mode\n");
+          fungible = 1;
+          break;
+        case 'a':
+          client_cmd = 'a';
+          break;
+        case 'x':
+          client_cmd = 'x';
+          break;
+        case 'i':
+          client_cmd = 'i';
+          break;
         case 'm':
             rc = parse_address(optarg, protocol_group, NULL);
             if(rc < 0)
@@ -317,6 +331,23 @@ main(int argc, char **argv)
         }
     }
 
+    if(client_cmd != '\0') {
+      if(client_cmd == 'i') {
+        ret = send_uclient_msg('i', NULL, 1);
+        if(ret < 0) {
+          exit(1);
+        }
+      } else {
+        for(i = optind; i < argc; i++) {
+          ret = send_uclient_msg(client_cmd, argv[i], 0);
+          if(ret < 0) {
+            exit(1);
+          }
+        }
+      }
+      return 0;
+    }
+
     if(num_config_files == 0) {
         if(access("/etc/babeld.conf", F_OK) >= 0) {
             config_files = malloc(sizeof(char*));
@@ -441,8 +472,8 @@ main(int argc, char **argv)
             goto fail;
     }
 
-    if(interfaces == NULL) {
-        fprintf(stderr, "Eek... asked to run on no interfaces!\n");
+    if((fungible == 0) && (interfaces == NULL)) {
+        fprintf(stderr, "Eek... asked to run on no interfaces (and without fungible mode)!\n");
         goto fail;
     }
 
@@ -578,6 +609,12 @@ main(int argc, char **argv)
         flushbuf(ifp);
     }
 
+    init_interfaces();
+
+    if(fungible) {
+      open_ipc_socket();
+    }
+
     debugf("Entering main loop.\n");
 
     while(1) {
@@ -623,6 +660,11 @@ main(int argc, char **argv)
                 maxfd = MAX(maxfd, local_sockets[i]);
             }
 #endif
+
+            if(fungible) {
+              maxfd = add_uclients_to_fd_set(&readfds, maxfd);
+            }
+            
             rc = select(maxfd + 1, &readfds, NULL, NULL, &tv);
             if(rc < 0) {
                 if(errno != EINTR) {
@@ -646,6 +688,10 @@ main(int argc, char **argv)
             filter.link = kernel_link_notify;
             filter.rule = kernel_rule_notify;
             kernel_callback(&filter);
+        }
+
+        if(fungible) {
+          handle_uclient_connections(&readfds);
         }
 
         if(FD_ISSET(protocol_socket, &readfds)) {
@@ -858,7 +904,9 @@ main(int argc, char **argv)
             "[-t table] [-T table] [-c file] [-C statement]\n"
             "               "
             "[-d level] [-D] [-L logfile] [-I pidfile]\n"
-            "               "
+            "                "
+            "[-F] [-a interface] [-x interface] [-i]\n"
+            "                "
             "[id] interface...\n",
             BABELD_VERSION);
     exit(1);
@@ -1094,7 +1142,7 @@ dump_xroute(FILE *out, struct xroute *xroute)
             xroute->metric);
 }
 
-static void
+void
 dump_tables(FILE *out)
 {
     struct neighbour *neigh;
