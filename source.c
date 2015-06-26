@@ -35,9 +35,7 @@ THE SOFTWARE.
 struct source *srcs = NULL;
 
 struct source*
-find_source(const unsigned char *id,
-            const unsigned char *prefix, unsigned char plen,
-            const unsigned char *src_prefix, unsigned char src_plen,
+find_source(const unsigned char *id, const unsigned char *p, unsigned char plen,
             int create, unsigned short seqno)
 {
     struct source *src;
@@ -51,11 +49,7 @@ find_source(const unsigned char *id,
             continue;
         if(src->plen != plen)
             continue;
-        if(src->src_plen != src_plen)
-            continue;
-        if(memcmp(src->prefix, prefix, 16) != 0)
-            continue;
-        if(memcmp(src->src_prefix, src_prefix, 16) == 0)
+        if(memcmp(src->prefix, p, 16) == 0)
             return src;
     }
 
@@ -69,10 +63,8 @@ find_source(const unsigned char *id,
     }
 
     memcpy(src->id, id, 8);
-    memcpy(src->prefix, prefix, 16);
+    memcpy(src->prefix, p, 16);
     src->plen = plen;
-    memcpy(src->src_prefix, src_prefix, 16);
-    src->src_plen = src_plen;
     src->seqno = seqno;
     src->metric = INFINITY;
     src->time = now.tv_sec;
