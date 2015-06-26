@@ -96,7 +96,6 @@ static volatile sig_atomic_t exiting = 0, dumping = 0, reopening = 0;
 static int accept_local_connections(fd_set *readfds);
 static int kernel_routes_callback(int changed, void *closure);
 static void init_signals(void);
-static void dump_tables(FILE *out);
 static int reopen_logfile(void);
 
 
@@ -112,6 +111,7 @@ main(int argc, char **argv)
     void *vrc;
     unsigned int seed;
     struct interface *ifp;
+    int ret;
     char client_cmd = '\0';
 
     gettime(&now);
@@ -130,7 +130,7 @@ main(int argc, char **argv)
     change_smoothing_half_life(4);
 
     while(1) {
-        opt = getopt(argc, argv, "m:p:h:H:i:k:A:sruS:d:g:lwz:M:t:T:c:C:DL:I:ax");
+        opt = getopt(argc, argv, "m:p:h:H:k:A:sruS:d:g:lwz:M:t:T:c:C:DL:I:Faxi");
         if(opt < 0)
             break;
 
@@ -144,6 +144,9 @@ main(int argc, char **argv)
           break;
         case 'x':
           client_cmd = 'x';
+          break;
+        case 'i':
+          client_cmd = 'i';
           break;
         case 'm':
             rc = parse_address(optarg, protocol_group, NULL);
@@ -281,10 +284,20 @@ main(int argc, char **argv)
     }
 
     if(client_cmd != '\0') {
-        for(i = optind; i < argc; i++) {
-          send_uclient_msg(client_cmd, argv[i]);
+      if(client_cmd == 'i') {
+        ret = send_uclient_msg('i', NULL, 1);
+        if(ret < 0) {
+          exit(1);
         }
-        return 0;
+      } else {
+        for(i = optind; i < argc; i++) {
+          ret = send_uclient_msg(client_cmd, argv[i], 0);
+          if(ret < 0) {
+            exit(1);
+          }
+        }
+      }
+      return 0;
     }
 
     if(num_config_files == 0) {
@@ -412,7 +425,7 @@ main(int argc, char **argv)
     }
 
     if((fungible == 0) && (interfaces == NULL)) {
-        fprintf(stderr, "Eek... asked to run without fungible mode on no interfaces!\n");
+        fprintf(stderr, "Eek... asked to run on no interfaces (and without fungible mode)!\n");
         goto fail;
     }
 
@@ -596,7 +609,9 @@ main(int argc, char **argv)
             }
 #endif
 
-            maxfd = add_uclients_to_fd_set(&readfds, maxfd);
+            if(fungible) {
+              maxfd = add_uclients_to_fd_set(&readfds, maxfd);
+            }
             
             rc = select(maxfd + 1, &readfds, NULL, NULL, &tv);
             if(rc < 0) {
@@ -617,7 +632,9 @@ main(int argc, char **argv)
         if(kernel_socket >= 0 && FD_ISSET(kernel_socket, &readfds))
             kernel_callback(kernel_routes_callback, NULL);
 
-        handle_uclient_connections(&readfds);
+        if(fungible) {
+          handle_uclient_connections(&readfds);
+        }
 
         if(FD_ISSET(protocol_socket, &readfds)) {
             rc = babel_recv(protocol_socket,
@@ -813,7 +830,7 @@ main(int argc, char **argv)
             "                "
             "[-d level] [-D] [-L logfile] [-I pidfile]\n"
             "                "
-            "[-a] [-x]\n"
+            "[-F] [-a interface] [-x interface] [-i]\n"
             "                "
             "[id] interface...\n",
             argv[0]);
@@ -1049,7 +1066,7 @@ dump_xroute(FILE *out, struct xroute *xroute)
             xroute->metric);
 }
 
-static void
+void
 dump_tables(FILE *out)
 {
     struct neighbour *neigh;

@@ -115,22 +115,56 @@ void handle_uclient_msg(struct uclient* ucl) {
   cmd = (ucl->msg)[0];
   arg = (ucl->msg)+1;
 
-  printf("Got command: '%c' with argument: %s\n", cmd, arg);
-
-  // TODO verify that this is an interface name
 
   switch(cmd) {
 
   case 'a':
+    // TODO verify that arg is an interface name
     manage_interface(arg);
     break;
 
   case 'x':
+    // TODO verify that arg is an interface name
     unmanage_interface(arg);
+    break;
+
+  case 'i':
+    send_table_dump(ucl);
     break;
   }
 
   remove_uclient(ucl);
+}
+
+void send_table_dump(struct uclient* ucl) {
+  char* buf;
+  size_t len = 0;
+  FILE *stream;
+
+  stream = open_memstream(&buf, &len);
+  dump_tables(stream);
+  fflush(stream);
+  fclose(stream);
+
+  if(len <= 0) {
+    return;
+  }
+
+  send_uclient_response(ucl, buf, len+1);
+}
+
+void send_uclient_response(struct uclient* ucl, char* data, size_t len) {
+  int sent_data = 0;
+  ssize_t ret;
+  
+  while(sent_data < len) {
+    ret = send(ucl->fd, data + sent_data, len - sent_data, 0);
+    if(ret < 0) {
+      return;
+    }
+    sent_data += ret;
+  }
+  close(ucl->fd);
 }
 
 void receive_uclient_msg(struct uclient* ucl) {
@@ -144,22 +178,37 @@ void receive_uclient_msg(struct uclient* ucl) {
     handle_uclient_msg(ucl);
     return;
   }
+  // if this is an information request
+  if(ucl->msg[0] == 'i') {
+    handle_uclient_msg(ucl);
+    return;    
+  }
+  
   ucl->msg_len += num_bytes;
 }
 
-int send_uclient_msg(char cmd, char* arg) {
+
+
+// if get_response > 1 then response is received and printed
+int send_uclient_msg(char cmd, char* arg, int get_response) {
 
   int sock;
   size_t cmd_len;
   int bytes_written;
+  int bytes_received;
   int ret;
   char* full_cmd;
   struct sockaddr_un addr;
+  char received[MAX_UCLIENT_RESPONSE_SIZE + 1];
 	
-  cmd_len = strlen(arg) + 2; // one for leading cmd and one for trailing \0
-  if(cmd_len > MAX_UCLIENT_MSG_SIZE) {
-    fprintf(stderr, "Command too long (max %d bytes)\n", MAX_UCLIENT_MSG_SIZE);
-    return -1;
+  if(arg) {
+    cmd_len = strlen(arg) + 2; // one for leading cmd and one for trailing \0
+    if(cmd_len > MAX_UCLIENT_MSG_SIZE) {
+      fprintf(stderr, "Command too long (max %d bytes)\n", MAX_UCLIENT_MSG_SIZE);
+      return -1;
+    }
+  } else {
+    cmd_len = 2;
   }
 
   full_cmd = malloc(cmd_len);
@@ -167,7 +216,11 @@ int send_uclient_msg(char cmd, char* arg) {
     return -1;
   }
 
-  snprintf(full_cmd, cmd_len, "%c%s", cmd, arg);
+  if(arg) {
+    snprintf(full_cmd, cmd_len, "%c%s", cmd, arg);
+  } else {
+    snprintf(full_cmd, cmd_len, "%c", cmd);
+  }
 
   memset(&addr, 0, sizeof(struct sockaddr_un));
   addr.sun_family = AF_LOCAL;
@@ -178,6 +231,7 @@ int send_uclient_msg(char cmd, char* arg) {
   if(connect(sock, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) < 0) {
     fprintf(stderr, "Connect failed to %s: %s\n", socket_file, strerror(errno));
     fprintf(stderr, "Are you sure you have a running babeld instance?\n");
+    free(full_cmd);
     close(sock);
     return -1;
   }
@@ -188,9 +242,32 @@ int send_uclient_msg(char cmd, char* arg) {
     ret = write(sock, full_cmd+bytes_written, cmd_len-bytes_written);
     if(ret < 0)  {
       fprintf(stderr, "Write failed to %s: %s\n", socket_file, strerror(errno));
+      free(full_cmd);
+      close(sock);
       return -1;
     }
     bytes_written += ret;
+  }
+
+  free(full_cmd);
+
+  if(get_response) {
+    bytes_received = 0;
+    // receive until disconnect, then print received data
+    while(1) {
+      ret = read(sock, received + bytes_received, MAX_UCLIENT_RESPONSE_SIZE - bytes_received);
+
+      if(ret < 0) {
+        fprintf(stderr, "Error reading from socket %s: %s\n", socket_file, strerror(errno));
+        return -1;
+      } else if(ret == 0) {
+        received[bytes_received] = '\0';
+        printf("%s\n", received);
+        break;
+      }
+      bytes_received += ret;
+    }
+
   }
 
   close(sock);
