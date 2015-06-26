@@ -135,4 +135,5 @@ int send_second_retraction(struct interface *ifp);
 void init_interfaces();
 int init_interface(struct interface *ifp);
 int manage_interface(char* ifname);
-int unmanage_interface(struct interface *ifp);
+int unmanage_interface(char* ifname);
+struct interface* interface_by_name(char* ifname);

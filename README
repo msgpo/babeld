@@ -1,3 +1,21 @@
+sudomesh patches
+================
+
+This is the sudomesh fork of Babel. It supports dynamically adding and removing interfaces. We need this for VPN servers where an arbitrary number of tunnel interfaces with unpredictable names appear and disappear. To use this feature start babeld with the -F flag to enable Fungible mode:
+
+    babeld -F
+
+When enabling Fungible mode specifying interfaces at startup is optional.
+
+To get a running babeld to manage an additional interface do e.g:
+ 
+    babeld -a tun1024
+
+To make a running babeld stop managing an interface do e.g:
+
+    babeld -x tun1024
+
+
 Babel
 =====
 
