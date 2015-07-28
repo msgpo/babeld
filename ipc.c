@@ -140,8 +140,16 @@ void send_table_dump(struct uclient* ucl) {
   char* buf;
   size_t len = 0;
   FILE *stream;
+  struct interface *ifp;
 
   stream = open_memstream(&buf, &len);
+
+  fprintf(stream, "Listening on interfaces: ");
+  FOR_ALL_INTERFACES(ifp) {
+    fprintf(stream, "%s ", ifp->name);
+  }
+  fprintf(stream, "\n");
+
   dump_tables(stream);
   fflush(stream);
   fclose(stream);
