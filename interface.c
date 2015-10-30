@@ -62,13 +62,25 @@ int remove_interface(struct interface* ifp) {
 
   struct interface *cur;
   struct interface *prev = NULL;
-
   if(!ifp || !interfaces)
     return -1;
-  
-  for(cur = interfaces; cur->next; cur = cur->next) {
+
+  for(cur = interfaces; cur; cur = cur->next) {
     if(cur == ifp) {
-      prev->next = cur->next;
+      if (prev) {
+        if (cur->next) {
+          prev->next = cur->next;
+        } else {
+          prev->next = NULL;
+        }
+      } else {
+        if (cur->next) {
+          interfaces = cur->next;
+        } else {
+          interfaces = NULL;
+        }
+      }
+      fprintf(stderr, "removing: %s\n", ifp->name);
       free(ifp);
       return 0;
     }
@@ -554,16 +566,19 @@ int unmanage_interface(char* ifname) {
     return -1;
   }
 
-  if(!if_up(ifp))
-    return -1;
   flush_interface_routes(ifp, 0);
-  if(send_first_retraction(ifp) < 0) {
-    return -1;
+
+  if(if_up(ifp)) {
+    if(send_first_retraction(ifp) < 0) {
+      return -1;
+    }
+    if(send_second_retraction(ifp) < 0) {
+      return -1;
+    }
   }
-  if(send_second_retraction(ifp) < 0) {
-    return -1;
-  }
+
   interface_up(ifp, 0);
+
   if(remove_interface(ifp) < 0) {
     return -1;
   }
